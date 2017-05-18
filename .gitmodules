@@ -1,0 +1,3 @@
+[submodule "coreutils-6.10"]
+	path = coreutils-6.10
+	url = https://github.com/coreutils/coreutils.git
