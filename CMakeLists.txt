@@ -5,9 +5,13 @@ find_program(KLEE_BINARY
   NAMES klee
 )
 
-if (NOT KLEE)
+if (NOT KLEE_BINARY)
   message(STATUS "Failed to find klee binary")
 endif()
+
+file(COPY sandbox-src DESTINATION sandbox)
+configure_file(testing-env.sh.in testing-env.sh COPYONLY)
+configure_file(test-program.in test-program @ONLY)
 
 # Find GNU make
 find_program(MAKE_BINARY
