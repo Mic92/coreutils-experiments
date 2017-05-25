@@ -1,6 +1,9 @@
 /build
 /coreutils-6.10-gcov-prefix/
+/coreutils-6.10-gcov/
 /coreutils-6.10-llvm-prefix/
+/coreutils-6.10-llvm/
+/klee-bugs
 test.env
 CMakeCache.txt
 CMakeFiles
