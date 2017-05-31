@@ -4,6 +4,7 @@
 /coreutils-6.10-llvm-prefix/
 /coreutils-6.10-llvm/
 /klee-bugs
+/logs
 test.env
 CMakeCache.txt
 CMakeFiles

@@ -1,0 +1,169 @@
+#!@PYTHON_EXECUTABLE@
+
+import subprocess
+import os
+import sys
+import datetime
+import argparse
+import metadata
+import json
+from collections import defaultdict
+
+
+def read_json_lines(path):
+    lines = []
+    with open(path) as f:
+        for line in f:
+            lines.append(json.loads(line))
+    return lines
+
+
+def record(args):
+    data = dict(applications=[],
+                measurement_name=args.measurement_name,
+                created_at=args.created_at)
+    for app in TEST_APPS:
+        proc = os.path.join("coreutils-6.10-llvm-prefix", "bin", app + ".bc")
+        log_path = os.path.join(args.log_dir, app)
+        klee_args = (["@KLEE_BINARY@"] +
+                     DEFAULT_ARGS +
+                     ["--output-dir=%s" % log_path, proc] +
+                     SYM_ARGS)
+        print("$ %s" % " ".join(klee_args))
+        subprocess.call(klee_args)
+        app_data = dict(directory=app, executable=proc)
+        data["applications"].append(app_data)
+
+    metadata.save(args.log_dir, data)
+
+
+def replay_test_case(args, app, test_case, stats):
+    if not test_case["is_error_case"]:
+        return
+    basename = test_case["testcase"][:-6]
+    path = basename + ".path"
+    replay_path = os.path.join(args.previous_measurement_path, app["directory"], path)
+    output_dir = os.path.join(args.log_dir, "%s-%s" % (app["directory"], basename))
+    executable = os.path.join(app["executable"])
+    klee_args = (["@KLEE_BINARY@"] +
+                 DEFAULT_ARGS +
+                 ["--replay-path=%s" % replay_path,
+                  "--output-dir=%s" % output_dir,
+                  executable] +
+                 SYM_ARGS)
+    print("$ %s" % " ".join(klee_args))
+    subprocess.call(klee_args)
+    replay_path_stats = os.path.join(output_dir, "stats.jsonl")
+    if len(read_json_lines(replay_path_stats)) != 1:
+        return
+
+    replay_test_case = read_json_lines(replay_path_stats)[0]
+
+    for field in test_case.keys():
+        stats["original_" + field].append(test_case[field])
+        stats["replay_" + field].append(replay_test_case[field])
+
+
+def replay(args):
+    import pandas as pd
+    data = metadata.load(args.previous_measurement_path)
+    stats = defaultdict(list)
+    for app in data["applications"]:
+        stat_path = os.path.join(args.previous_measurement_path,
+                                 app["directory"],
+                                 "stats.jsonl")
+        test_cases = read_json_lines(stat_path)
+        for test_case in test_cases:
+            replay_test_case(args, app, test_case, stats)
+    stats_path = os.path.join(args.log_dir, "resource_stats.csv")
+    pd.DataFrame(stats).to_csv(stats_path, sep="\t")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(usage='%(prog)s [options]')
+    parser.add_argument("--log-path",
+                        help="base directory where logs will be stored",
+                        default="logs")
+    subparsers = parser.add_subparsers(dest="action")
+    record = subparsers.add_parser("record")
+    record.add_argument("measurement_name")
+    replay = subparsers.add_parser("replay")
+    replay.add_argument("previous_measurement_path")
+    #replay.add_argument("--parse-resource-usage", action="store_true")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    os.chdir(os.path.dirname(sys.argv[0]))
+    now = datetime.datetime.utcnow()
+    now = now.replace(microsecond=0).strftime("%Y-%m-%dT%H-%M-%S")
+
+    if args.action == "replay":
+        previous = args.previous_measurement_path
+        args.measurement_name = os.path.basename(previous) + ".replay"
+        args.log_dir = os.path.join(os.path.dirname(previous), args.measurement_name)
+    else:
+        dirname = "%s-%s" % (now, args.measurement_name)
+        args.log_dir = os.path.join(args.log_path, dirname)
+
+    args.created_at = now
+    print("write logs to '%s'" % args.log_dir)
+    os.makedirs(args.log_dir)
+    cmd = ["env", "-i", "bash", "-c", "(source testing-env.sh; env >test.env)"]
+    subprocess.call(cmd)
+    if args.action == "record":
+        record(args)
+    else:
+        replay(args)
+
+TEST_APPS = ["md5sum", "mknod", "mkfifo", "mkdir", "paste", "ptx", "pr"]
+
+DEFAULT_ARGS = [
+    "--simplify-sym-indices",
+    "--write-cvcs",
+    "--write-cov",
+    "--output-module",
+    "--disable-inlining",
+    "--optimize",
+    "--use-forked-solver",
+    "--use-cex-cache",
+    "--libc=uclibc",
+    "--posix-runtime",
+    "--allow-external-sym-calls",
+    "--only-output-states-covering-new",
+    "--environ=test.env",
+    "--run-in=sandbox",
+    "--max-sym-array-size=4096",
+    "--max-instruction-time=3.",
+    "--max-memory=4000",
+    #"--max-time=120.",
+    "--debug-print-instructions=all:file",
+    #"--debug-print-instructions=src:file",
+    #"--debug-print-instructions=all:file",
+    #"--debug-print-instructions=compact:file",
+    "--max-time=60.",
+    "--watchdog",
+    "--max-memory-inhibit=false",
+    "--max-static-fork-pct=1",
+    "--max-static-solve-pct=1",
+    "--max-static-cpfork-pct=1",
+    "--switch-type=internal",
+    "--search=random-path",
+    "--search=nurs:covnew",
+    "--use-batching-search",
+    "--batch-instructions=10000",
+    "--emit-all-errors",
+    "--write-paths",
+]
+
+SYM_ARGS = [
+    "--sym-args", "0", "1", "10",
+    "--sym-args", "0", "2", "2",
+    "--sym-files", "1", "8",
+    "--sym-stdin", "8",
+    "--sym-stdout",
+]
+
+if __name__ == "__main__":
+    main()

@@ -12,8 +12,10 @@ if (NOT KLEE_BINARY)
 endif()
 
 file(COPY sandbox-src DESTINATION sandbox)
+file(GLOB PYTHONFILES *.py)
+file(COPY ${PYTHONFILES} DESTINATION .)
 configure_file(testing-env.sh.in testing-env.sh COPYONLY)
-configure_file(test-program.py.in test-program @ONLY)
+configure_file(test-programs-with-klee.py.in test-programs-with-klee @ONLY)
 
 # Find GNU make
 find_program(MAKE_BINARY

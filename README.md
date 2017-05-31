@@ -3,7 +3,6 @@
 This repository uses the latest version of Klee to reproduce the bugs found in coreutils 6.10
 as discussed in the [KLEE OSDI’08 paper](http://llvm.org/pubs/2008-12-OSDI-KLEE.html).
 
-
 Commit log of bug fixes:
 
 - https://github.com/coreutils/coreutils/commit/a0851554bd52038ed47e46ee521ce74a5a09f747
@@ -13,8 +12,13 @@ Commit log of bug fixes:
 - https://github.com/coreutils/coreutils/commit/7cb24684cc4ef96bb25dfc1c819acfc3b98d9442
 - https://github.com/coreutils/coreutils/commit/6856089f7bfaca2709b303f01dae001a30930b61
 
-
 ## Build
+
+Klee was build with the following cmake feature flags:
+
+```
+-DENABLE_SOLVER_STP=ON -DENABLE_POSIX_RUNTIME=ON -DENABLE_KLEE_UCLIBC=ON -DENABLE_TCMALLOC=ON
+```
 
 dependencies see default.nix
 
