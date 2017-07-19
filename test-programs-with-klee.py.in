@@ -9,6 +9,8 @@ import metadata
 import json
 from collections import defaultdict
 
+from multiprocessing import Pool
+
 
 def read_json_lines(path):
     lines = []
@@ -18,21 +20,33 @@ def read_json_lines(path):
     return lines
 
 
+class Record():
+    def __init__(self, args):
+        self.args = args
+        self.gdb_args = ["cgdb", "--args"] if args.debug else []
+
+    def run(self, idx):
+        exe, *argv = TEST_APPS[idx]
+        proc = os.path.join("coreutils-6.10-llvm-prefix", "bin", exe + ".bc")
+        directory = f"{exe}-{idx}"
+        log_path = os.path.join(self.args.log_dir, directory)
+        klee_args = (self.gdb_args +
+                     ["@KLEE_BINARY@"] +
+                     DEFAULT_ARGS +
+                     ["--output-dir=%s" % log_path, proc] + argv)
+        print("$ %s" % " ".join(klee_args))
+        subprocess.call(klee_args)
+        app_data = dict(directory=directory, executable=proc)
+        return app_data
+
+
 def record(args):
+    r = Record(args)
     data = dict(applications=[],
                 measurement_name=args.measurement_name,
                 created_at=args.created_at)
-    for app in TEST_APPS:
-        proc = os.path.join("coreutils-6.10-llvm-prefix", "bin", app + ".bc")
-        log_path = os.path.join(args.log_dir, app)
-        klee_args = (["@KLEE_BINARY@"] +
-                     DEFAULT_ARGS +
-                     ["--output-dir=%s" % log_path, proc] +
-                     SYM_ARGS)
-        print("$ %s" % " ".join(klee_args))
-        subprocess.call(klee_args)
-        app_data = dict(directory=app, executable=proc)
-        data["applications"].append(app_data)
+    p = Pool(args.concurrency)
+    data["applications"] = p.map(r.run, range(0, len(TEST_APPS)))
 
     metadata.save(args.log_dir, data)
 
@@ -45,6 +59,7 @@ def replay_test_case(args, app, test_case, stats):
     replay_path = os.path.join(args.previous_measurement_path, app["directory"], path)
     output_dir = os.path.join(args.log_dir, "%s-%s" % (app["directory"], basename))
     executable = os.path.join(app["executable"])
+
     klee_args = (["@KLEE_BINARY@"] +
                  DEFAULT_ARGS +
                  ["--replay-path=%s" % replay_path,
@@ -54,13 +69,19 @@ def replay_test_case(args, app, test_case, stats):
     print("$ %s" % " ".join(klee_args))
     subprocess.call(klee_args)
     replay_path_stats = os.path.join(output_dir, "stats.jsonl")
-    if len(read_json_lines(replay_path_stats)) != 1:
+    replay_test_cases = read_json_lines(replay_path_stats)
+    if len(replay_test_cases) != 1:
         return
+    replay_test_case = replay_test_cases[0]
 
-    replay_test_case = read_json_lines(replay_path_stats)[0]
+    length = subprocess.check_output(["wc", "-l", replay_path]).decode("utf-8").split()[0]
 
+    stats["application"].append(app["directory"])
+    stats["replay_path_length"].append(length)
     for field in test_case.keys():
         stats["original_" + field].append(test_case[field])
+
+    for field in replay_test_case.keys():
         stats["replay_" + field].append(replay_test_case[field])
 
 
@@ -75,12 +96,14 @@ def replay(args):
         test_cases = read_json_lines(stat_path)
         for test_case in test_cases:
             replay_test_case(args, app, test_case, stats)
-    stats_path = os.path.join(args.log_dir, "resource_stats.csv")
+    stats_path = os.path.join(args.log_dir, "resource_stats.tsv")
     pd.DataFrame(stats).to_csv(stats_path, sep="\t")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(usage='%(prog)s [options]')
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--concurrency", type=int)
     parser.add_argument("--log-path",
                         help="base directory where logs will be stored",
                         default="logs")
@@ -89,7 +112,6 @@ def parse_args():
     record.add_argument("measurement_name")
     replay = subparsers.add_parser("replay")
     replay.add_argument("previous_measurement_path")
-    #replay.add_argument("--parse-resource-usage", action="store_true")
     return parser.parse_args()
 
 
@@ -117,7 +139,30 @@ def main():
     else:
         replay(args)
 
-TEST_APPS = ["md5sum", "mknod", "mkfifo", "mkdir", "paste", "ptx", "pr"]
+#TEST_APPS = ["md5sum", "mknod", "mkfifo", "mkdir", "paste", "ptx", "seq", "pr"]
+#TEST_APPS = ["tac"]
+
+
+def jasper_args(input_fmt, output_fmt):
+    return [
+        "jasper",
+        "--sym-files", "2", "600",
+        "--input-format", input_fmt,
+        "--output-format", output_fmt,
+        "--input", "A",
+        "--output", "B",
+    ]
+
+TEST_APPS = [
+    jasper_args("jp2", "bmp"),
+    jasper_args("bmp", "jp2"),
+    jasper_args("mif", "jp2"),
+    jasper_args("jp2", "mif"),
+    jasper_args("jpc", "jp2"),
+    jasper_args("jpc", "pgx"),
+    jasper_args("jp2", "jpc"),
+    jasper_args("pgx", "jpc"),
+]
 
 DEFAULT_ARGS = [
     "--simplify-sym-indices",
@@ -135,14 +180,13 @@ DEFAULT_ARGS = [
     "--environ=test.env",
     "--run-in=sandbox",
     "--max-sym-array-size=4096",
-    "--max-instruction-time=3.",
-    "--max-memory=4000",
-    #"--max-time=120.",
-    "--debug-print-instructions=all:file",
+    "--max-instruction-time=120.",
+    "--max-memory=120000",
+    "--max-time=7200.",
+    #"--debug-print-instructions=all:file",
     #"--debug-print-instructions=src:file",
     #"--debug-print-instructions=all:file",
     #"--debug-print-instructions=compact:file",
-    "--max-time=60.",
     "--watchdog",
     "--max-memory-inhibit=false",
     "--max-static-fork-pct=1",
@@ -150,20 +194,35 @@ DEFAULT_ARGS = [
     "--max-static-cpfork-pct=1",
     "--switch-type=internal",
     "--search=random-path",
-    "--search=nurs:covnew",
     "--use-batching-search",
     "--batch-instructions=10000",
+    "--check-overshift",
+    "--check-div-zero",
     "--emit-all-errors",
     "--write-paths",
 ]
 
+# --input lena_gray.bmp --output lena_gray.jp2
 SYM_ARGS = [
-    "--sym-args", "0", "1", "10",
-    "--sym-args", "0", "2", "2",
-    "--sym-files", "1", "8",
-    "--sym-stdin", "8",
-    "--sym-stdout",
+    "--sym-files", "2", "1250",
+    "--output-format", "jp2",
+    "--input-format", "bmp",
+    "--input", "A",
+    "--output", "B",
+    #"--sym-files", "2", "200",
+    #"--sym-args", "0", "1", "10",
+    #"--sym-args", "0", "1", "10",
+    #"--sym-args", "0", "2", "2",
+    #"--sym-stdout",
 ]
+
+#SYM_ARGS = [
+#    "--sym-args", "0", "1", "10",
+#    "--sym-args", "0", "2", "2",
+#    "--sym-files", "1", "8",
+#    "--sym-stdin", "8",
+#    "--sym-stdout",
+#]
 
 if __name__ == "__main__":
     main()

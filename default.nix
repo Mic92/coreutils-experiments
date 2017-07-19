@@ -13,11 +13,20 @@ in stdenv.mkDerivation {
   name = "env";
   buildInputs = [
     bashInteractive
+    parallel
     cmake
+    cgdb
     llvm_34
     ninja
     wllvm
     clang
-    (python3.withPackages (packages: with packages; [ pandas seaborn flake8 ]))
+    (python3.withPackages (packages: with packages; [ pandas numpy seaborn flake8 capstone ropper ]))
+    (texlive.combine { 
+       inherit (texlive) 
+       scheme-basic 
+       collection-binextra
+       collection-latex
+       type1cm;
+     })
   ];
 }
